@@ -3,8 +3,10 @@ name = "clue"
 version = "2.2.1-wasm"
 description = "C/Rust like programming language that compiles into Lua code\nMade by Maiori\nhttps://github.com/ClueLang/Clue"
 edition = "2018"
-build = "build.rs"
 authors = ["Maiori"]
+
+[dependencies]
+wasm-bindgen = "0.2.63"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
