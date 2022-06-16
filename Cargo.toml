@@ -9,9 +9,6 @@ authors = ["Maiori"]
 [build-dependencies]
 winres = "0.1"
 
-[dependencies]
-clap = {version = "3.1.6", features = ["derive"]}
-
 [lib]
 crate-type = ["cdylib", "rlib"]
 path = "src/main.rs"
