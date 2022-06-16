@@ -22,7 +22,7 @@ mod scanner;
 use compiler::*;
 use parser::*;
 use scanner::*;
-use std::{fs, fs::File, io::prelude::*, path::Path, time::Instant};
+use wasm_bindgen::prelude::*;
 
 pub static mut finaloutput: String = String::new();
 
@@ -48,20 +48,10 @@ pub static mut ENV_DEBUGCOMMENTS: bool = false;
 	// #[clap(short, long)]
 	// debugcomments: bool,
 
-fn AddToOutput(string: &str) {
-	unsafe { finaloutput += string }
-}
-
-
-fn CompileCode(code: String, name: String, scope: usize) -> Result<String, String> {
-	let time = Instant::now();
+#[wasm_bindgen]
+pub fn CompileCode(code: String, name: String, scope: usize) -> Result<String, String> {
 	let tokens: Vec<Token> = ScanCode(code, name.clone())?;
 	let ctokens = ParseTokens(tokens, name.clone())?;
 	let code = CompileTokens(scope, ctokens);
-	println!(
-		"Compiled file \"{}\" in {} seconds!",
-		name,
-		time.elapsed().as_secs_f32()
-	);
 	Ok(code)
 }
