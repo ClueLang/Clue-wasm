@@ -5,7 +5,7 @@ macro_rules! check {
 	($tocheck: expr) => {
 		match $tocheck {
 			Ok(t) => t,
-			Err(e) => return e,
+			Err(e) => return Err(e.to_string()),
 		}
 	};
 }
@@ -49,8 +49,9 @@ pub static mut ENV_DEBUGCOMMENTS: bool = false;
 	// debugcomments: bool,
 
 #[wasm_bindgen]
-pub fn CompileCode(code: String, name: String, scope: usize) -> String {
-	let tokens: Vec<Token> = check!(ScanCode(code, name.clone()));
-	let ctokens = check!(ParseTokens(tokens, name.clone()));
-	CompileTokens(scope, ctokens)
+pub fn CompileCode(code: String, name: String, scope: usize) -> Result<String, String> {
+	let tokens: Vec<Token> = ScanCode(code, name.clone())?;
+	let ctokens = ParseTokens(tokens, name.clone())?;
+	let code = CompileTokens(scope, ctokens);
+	Ok(code)
 }

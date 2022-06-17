@@ -958,10 +958,7 @@ impl ParserInfo {
 					if t.kind != NUMBER {
 						return Err(self.error("Enums values should be a non-float number ranging from -32768 to 32767.", t.line));
 					}
-					n = match t.lexeme.parse() {
-						Ok(n) => n,
-						Err(e) => return Err(e.to_string()),
-					};
+					n = check!(t.lexeme.parse());
 					self.advanceIf(COMMA);
 					SYMBOL(n.to_string())
 				}
