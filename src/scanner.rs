@@ -2,8 +2,8 @@
 
 use self::TokenType::*;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[rustfmt::skip]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TokenType {
 	//symbols
 	ROUND_BRACKET_OPEN, ROUND_BRACKET_CLOSED, SQUARE_BRACKET_OPEN,
@@ -39,7 +39,11 @@ pub struct Token {
 
 impl Token {
 	pub fn new(kind: TokenType, lexeme: String, line: usize) -> Token {
-		Token { kind, lexeme, line }
+		Token {
+			kind: kind,
+			lexeme: String::from(lexeme),
+			line: line,
+		}
 	}
 }
 
@@ -93,7 +97,7 @@ impl CodeInfo {
 		if self.at(self.current) != expected {
 			return false;
 		}
-		self.current += 1;
+		self.current = self.current + 1;
 		true
 	}
 
@@ -214,7 +218,10 @@ impl CodeInfo {
 		} else {
 			self.current += 1;
 			let mut literal: String = self.substr(self.start + 1, self.current - 1);
-			literal.retain(|c| !matches!(c, '\r' | '\n' | '\t'));
+			literal.retain(|c| match c {
+				'\r' | '\n' | '\t' => false,
+				_ => true,
+			});
 			self.addLiteralToken(STRING, literal);
 		}
 		self.line = aline;
@@ -272,7 +279,7 @@ pub fn ScanCode(code: String, filename: String) -> Result<Vec<Token>, String> {
 					}
 				}
 				'*' => {
-					while !(i.ended() || i.peek(0) == '*' && i.peek(1) == '/') {
+					while !i.ended() && !(i.peek(0) == '*' && i.peek(1) == '/') {
 						if i.peek(0) == '\n' {
 							i.line += 1
 						}
@@ -337,7 +344,7 @@ pub fn ScanCode(code: String, filename: String) -> Result<Vec<Token>, String> {
 									|c| {
 										let c = *c;
 										c.is_ascii_digit()
-											|| ('a'..='f').contains(&c) || ('A'..='F').contains(&c)
+											|| (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 									},
 									false,
 								);

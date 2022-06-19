@@ -31,25 +31,14 @@ pub static mut ENV_CONTINUE: bool = false;
 pub static mut ENV_RAWSETGLOBALS: bool = false;
 pub static mut ENV_DEBUGCOMMENTS: bool = false;
 
-
-	// /// Use LuaJIT's bit library for bitwise operations
-	// #[clap(short, long, value_name = "VAR NAME")]
-	// jitbit: Option<String>,
-
-	// /// Use tags and goto for continue
-	// #[clap(short, long)]
-	// r#continue: bool,
-
-	// /// Use rawset to create globals
-	// #[clap(short, long)]
-	// rawsetglobals: bool,
-
-	// /// Include debug comments in the output
-	// #[clap(short, long)]
-	// debugcomments: bool,
-
+#[wasm_bindgen]
+extern "C" {
+	#[wasm_bindgen(js_namespace = console)]
+	fn log(s: &str);
+}
 #[wasm_bindgen]
 pub fn CompileCode(code: String, name: String, scope: usize) -> Result<String, String> {
+	log(&format!("{:?}", code));
 	let tokens: Vec<Token> = ScanCode(code, name.clone())?;
 	let ctokens = ParseTokens(tokens, name.clone())?;
 	let code = CompileTokens(scope, ctokens);
