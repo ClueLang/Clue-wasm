@@ -7,7 +7,10 @@ use crate::{
 	compiler::CompileTokens, finaloutput, Token, TokenType, ENV_CONTINUE, ENV_DEBUGCOMMENTS,
 	ENV_JITBIT,
 };
-use std::{cmp, collections::LinkedList};
+use std::{
+	cmp,
+	collections::{HashMap, LinkedList},
+};
 
 macro_rules! expression {
 	($($x: expr),*) => {
@@ -43,6 +46,7 @@ pub enum ComplexToken {
 	TABLE {
 		values: Vec<(Option<Expression>, Expression, usize)>,
 		metas: Vec<(String, Expression, usize)>,
+		metatable: Option<String>,
 	},
 
 	FUNCTION {
@@ -105,6 +109,11 @@ pub enum ComplexToken {
 		line: usize,
 	},
 
+	MACRO_CALL {
+		expr: Expression,
+		args: Vec<Expression>,
+	},
+
 	SYMBOL(String),
 	PSEUDO(usize),
 	CALL(Vec<Expression>),
@@ -131,6 +140,7 @@ struct ParserInfo {
 	testing: Option<usize>,
 	localid: u8,
 	statics: String,
+	macros: HashMap<String, Expression>,
 }
 
 impl ParserInfo {
@@ -144,6 +154,7 @@ impl ParserInfo {
 			testing: None,
 			localid: 0,
 			statics: String::new(),
+			macros: HashMap::new(),
 		}
 	}
 
@@ -258,14 +269,13 @@ impl ParserInfo {
 		Ok(())
 	}
 
-	fn buildCall(&mut self) -> Result<ComplexToken, String> {
-		self.current += 2;
+	fn buildCall(&mut self) -> Result<Vec<Expression>, String> {
 		let args: Vec<Expression> = if self.advanceIf(ROUND_BRACKET_CLOSED) {
 			Vec::new()
 		} else {
 			self.findExpressions(COMMA, Some((ROUND_BRACKET_CLOSED, ")")))?
 		};
-		Ok(CALL(args))
+		Ok(args)
 	}
 
 	fn findExpressions(
@@ -287,6 +297,7 @@ impl ParserInfo {
 	fn buildTable(&mut self) -> Result<ComplexToken, String> {
 		let mut values: Vec<(Option<Expression>, Expression, usize)> = Vec::new();
 		let mut metas: Vec<(String, Expression, usize)> = Vec::new();
+		let mut metatable: Option<String> = None;
 		loop {
 			if self.advanceIf(CURLY_BRACKET_CLOSED) {
 				break;
@@ -307,6 +318,10 @@ impl ParserInfo {
 				DEFINE => {
 					iskey = true;
 					false
+				}
+				META if self.peek(1).kind == WITH => {
+					iskey = true;
+					true
 				}
 				EOF => return Err(self.expectedBefore("}", "<end>", self.peek(0).line)),
 				_ => true,
@@ -349,31 +364,49 @@ impl ParserInfo {
 					self.current -= 1;
 				}
 				META => {
-					name = Err(String::from(match self.advance().lexeme.as_ref() {
-						"index" => "__index",
-						"newindex" => "__newindex",
-						"mode" => "__mode",
-						"call" => "__call",
-						"metatable" => "__metatable",
-						"tostring" => "__tostring",
-						"gc" => "__gc",
-						"name" => "__name",
-						"unm" | "unary" => "__unm",
-						"add" | "+" => "__add",
-						"sub" | "-" => "__sub",
-						"mul" | "*" => "__mul",
-						"div" | "/" => "__div",
-						"mod" | "%" => "__mod",
-						"pow" | "^" => "__pow",
-						"concat" | ".." => "__concat",
-						"eq" | "equal" | "==" => "__eq",
-						"lt" | "less_than" | "<" => "__lt",
-						"le" | "less_than_equal" | "<=" => "__le",
-						_ => {
-							let t = self.peek(0);
-							return Err(self.expected("<meta name>", &t.lexeme, t.line));
+					if self.advanceIf(WITH) {
+						if !metas.is_empty() {
+							return Err(self.error(
+								"An external metatable cannot be used if the table already set its own metamethods",
+								pn.line
+							));
 						}
-					}))
+						metatable = Some(self.assertAdvance(IDENTIFIER, "<name>")?.lexeme);
+						self.advanceIf(COMMA);
+						continue;
+					} else {
+						if let Some(_) = metatable {
+							return Err(self.error(
+								"Metamethods cannot be set if the table already ueses an external metatable",
+								pn.line
+							));
+						}
+						name = Err(String::from(match self.advance().lexeme.as_ref() {
+							"index" => "__index",
+							"newindex" => "__newindex",
+							"mode" => "__mode",
+							"call" => "__call",
+							"metatable" => "__metatable",
+							"tostring" => "__tostring",
+							"gc" => "__gc",
+							"name" => "__name",
+							"unm" | "unary" => "__unm",
+							"add" | "+" => "__add",
+							"sub" | "-" => "__sub",
+							"mul" | "*" => "__mul",
+							"div" | "/" => "__div",
+							"mod" | "%" => "__mod",
+							"pow" | "^" => "__pow",
+							"concat" | ".." => "__concat",
+							"eq" | "equal" | "==" => "__eq",
+							"lt" | "less_than" | "<" => "__lt",
+							"le" | "less_than_equal" | "<=" => "__le",
+							_ => {
+								let t = self.peek(0);
+								return Err(self.expected("<meta name>", &t.lexeme, t.line));
+							}
+						}))
+					}
 				}
 				_ => return Err(self.expected("<name>", &pn.lexeme, pn.line)),
 			}
@@ -415,13 +448,17 @@ impl ParserInfo {
 			self.current -= 1;
 			self.advanceIf(COMMA);
 		}
-		Ok(TABLE { values, metas })
+		Ok(TABLE {
+			values,
+			metas,
+			metatable,
+		})
 	}
 
 	fn checkOperator(&mut self, t: &Token, checkback: bool) -> Result<(), String> {
 		if match self.peek(0).kind {
 			NUMBER | IDENTIFIER | STRING | DOLLAR | PROTECTED_GET | TRUE | FALSE | MINUS
-			| BIT_NOT | NIL | NOT | HASHTAG | ROUND_BRACKET_OPEN | TREDOTS => false,
+			| BIT_NOT | NIL | NOT | HASHTAG | ROUND_BRACKET_OPEN | AT | THREEDOTS => false,
 			_ => true,
 		} {
 			return Err(self.error(
@@ -440,7 +477,7 @@ impl ParserInfo {
 				| NIL
 				| ROUND_BRACKET_CLOSED
 				| SQUARE_BRACKET_CLOSED
-				| TREDOTS => false,
+				| THREEDOTS => false,
 				_ => true,
 			} {
 			return Err(self.error(
@@ -489,7 +526,7 @@ impl ParserInfo {
 	fn checkVal(&mut self) -> bool {
 		match self.peek(0).kind {
 			NUMBER | IDENTIFIER | STRING | DOLLAR | PROTECTED_GET | TRUE | FALSE | NIL | NOT
-			| HASHTAG | CURLY_BRACKET_OPEN | TREDOTS => {
+			| HASHTAG | CURLY_BRACKET_OPEN | THREEDOTS | MATCH => {
 				self.current += 1;
 				true
 			}
@@ -507,6 +544,27 @@ impl ParserInfo {
 					let fname = self.buildIdentifier()?;
 					self.current -= 1;
 					expr.push_back(fname);
+					if self.checkVal() {
+						break t;
+					}
+				}
+				AT => {
+					let name = self.assertAdvance(IDENTIFIER, "<name>")?.lexeme;
+					let code = self.macros.get_mut(&name);
+					let macroexpr = if let Some(macroexpr) = code {
+						macroexpr.clone()
+					} else {
+						return Err(self.error(format!("The macro {} is not defined", name), t.line));
+					};
+					let args = if self.advanceIf(ROUND_BRACKET_OPEN) {
+						self.buildCall()?
+					} else {
+						Vec::new()
+					};
+					expr.push_back(MACRO_CALL {
+						expr: macroexpr,
+						args,
+					});
 					if self.checkVal() {
 						break t;
 					}
@@ -653,7 +711,7 @@ impl ParserInfo {
 						break t;
 					}
 				}
-				TREDOTS | NUMBER | TRUE | FALSE | NIL => {
+				THREEDOTS | NUMBER | TRUE | FALSE | NIL => {
 					expr.push_back(SYMBOL(t.lexeme.clone()));
 					if self.checkVal() {
 						break t;
@@ -811,8 +869,7 @@ impl ParserInfo {
 					}
 				}
 				ROUND_BRACKET_OPEN => {
-					self.current -= 2;
-					expr.push_back(self.buildCall()?);
+					expr.push_back(CALL(self.buildCall()?));
 					if self.checkVal() {
 						break;
 					}
@@ -886,7 +943,7 @@ impl ParserInfo {
 				let t = self.advance();
 				match t.kind {
 					IDENTIFIER => t,
-					TREDOTS => {
+					THREEDOTS => {
 						self.assertCompare(ROUND_BRACKET_CLOSED, ")")?;
 						t
 					}
@@ -1201,13 +1258,17 @@ pub fn ParseTokens(tokens: Vec<Token>, filename: String) -> Result<Expression, S
 			IDENTIFIER => {
 				let testexpr = i.test(|i| i.buildName()).0;
 				if let Err(msg) = testexpr {
-					if &msg == "You can't call functions here" {
-						let expr = &mut i.buildExpression(None)?;
-						i.expr.append(expr);
-						i.current -= 1;
-						continue;
+					match msg.as_str() {
+						"You can't call functions here"
+						| "Unexpected token '?.'"
+						| "Unexpected token '?['" => {
+							let expr = &mut i.buildExpression(None)?;
+							i.expr.append(expr);
+							i.current -= 1;
+							continue;
+						}
+						_ => return Err(i.error(msg, i.testing.unwrap())),
 					}
-					return Err(i.error(msg, i.testing.unwrap()));
 				}
 				i.current += 1;
 				let mut names: Vec<Expression> = Vec::new();
@@ -1283,6 +1344,7 @@ pub fn ParseTokens(tokens: Vec<Token>, filename: String) -> Result<Expression, S
 				if i.peek(0).kind == UNTIL {
 					i.current += 1;
 					let condition = i.buildExpression(None)?;
+					i.current -= 1;
 					i.expr.push_back(LOOP_UNTIL { condition, code })
 				} else {
 					i.expr.push_back(WHILE_LOOP {
@@ -1353,7 +1415,7 @@ pub fn ParseTokens(tokens: Vec<Token>, filename: String) -> Result<Expression, S
 				i.advanceIf(SEMICOLON);
 			}
 			RETURN => {
-				let expr = if i.advanceIf(SEMICOLON) {
+				let expr = if i.ended() || i.advanceIf(SEMICOLON) {
 					None
 				} else {
 					Some(i.findExpressions(COMMA, None)?)
@@ -1381,6 +1443,12 @@ pub fn ParseTokens(tokens: Vec<Token>, filename: String) -> Result<Expression, S
 					error,
 					catch,
 				});
+			}
+			MACRO => {
+				let name = i.assertAdvance(IDENTIFIER, "<name>")?.lexeme;
+				let code = i.buildExpression(None)?;
+				i.current -= 1;
+				i.macros.insert(name, code);
 			}
 			FN | ENUM => {
 				return Err(i.error(

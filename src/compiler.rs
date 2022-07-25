@@ -141,6 +141,17 @@ fn CompileExpression(mut scope: usize, names: Option<&Vec<String>>, expr: Expres
 	let mut result = String::new();
 	for t in expr {
 		result += &match t {
+			MACRO_CALL { expr, args } => {
+				let args = {
+					let mut strings: Vec<String> = Vec::new();
+					for arg in args {
+						strings.push(CompileExpression(scope, names, arg))
+					}
+					strings
+				};
+				let expr = CompileExpression(scope, Some(&args), expr);
+				format!("({})", expr)
+			}
 			SYMBOL(lexeme) => lexeme,
 			PSEUDO(num) => match names {
 				Some(names) => names
@@ -149,7 +160,11 @@ fn CompileExpression(mut scope: usize, names: Option<&Vec<String>>, expr: Expres
 					.to_string(),
 				None => String::from("nil"),
 			},
-			TABLE { values, metas } => {
+			TABLE {
+				values,
+				metas,
+				metatable,
+			} => {
 				scope += 1;
 				let mut prevline = 0usize;
 				let pre1 = Indentate(scope);
@@ -177,7 +192,11 @@ fn CompileExpression(mut scope: usize, names: Option<&Vec<String>>, expr: Expres
 				let pre2 = Indentate(scope - 1);
 				if metas.is_empty() {
 					scope -= 1;
-					format!("{{{}{}}}", values, pre2)
+					if let Some(metatable) = metatable {
+						format!("setmetatable({{{}{}}}, {})", values, pre2, metatable)
+					} else {
+						format!("{{{}{}}}", values, pre2)
+					}
 				} else {
 					let metas = CompileList(metas, ", ", &mut |(name, value, line)| {
 						let value = CompileExpression(scope, names, value);
@@ -202,12 +221,8 @@ fn CompileExpression(mut scope: usize, names: Option<&Vec<String>>, expr: Expres
 				format!("function({}){}end", args, code)
 			}
 			IDENT { expr, .. } => CompileIdentifier(scope, names, expr),
-			CALL(args) => {
-				format!("({})", CompileExpressions(scope, names, args))
-			}
-			EXPR(expr) => {
-				format!("({})", CompileExpression(scope, names, expr))
-			}
+			CALL(args) => format!("({})", CompileExpressions(scope, names, args)),
+			EXPR(expr) => format!("({})", CompileExpression(scope, names, expr)),
 			_ => {
 				panic!("Unexpected ComplexToken found")
 			}
@@ -302,26 +317,29 @@ pub fn CompileTokens(scope: usize, ctokens: Expression) -> String {
 				}
 				let mut i = 0usize;
 				let values = CompileList(values, ", ", &mut |expr| {
-					let name = names.get(i).unwrap();
+					let name = if let Some(name) = names.get(i) {
+						name.clone()
+					} else {
+						String::from("nil")
+					};
 					i += 1;
 					(if kind == DEFINE {
 						String::new()
 					} else {
-						name.clone()
-							+ &match kind {
-								DEFINE_AND => " and ",
-								DEFINE_OR => " or ",
-								INCREASE => " + ",
-								DECREASE => " - ",
-								MULTIPLY => " * ",
-								DIVIDE => " / ",
-								EXPONENTIATE => " ^ ",
-								CONCATENATE => " .. ",
-								MODULATE => " % ",
-								_ => {
-									panic!("Unexpected alter type found")
-								}
+						name + &match kind {
+							DEFINE_AND => " and ",
+							DEFINE_OR => " or ",
+							INCREASE => " + ",
+							DECREASE => " - ",
+							MULTIPLY => " * ",
+							DIVIDE => " / ",
+							EXPONENTIATE => " ^ ",
+							CONCATENATE => " .. ",
+							MODULATE => " % ",
+							_ => {
+								panic!("Unexpected alter type found")
 							}
+						}
 					}) + &CompileExpression(scope, Some(&names), expr)
 				});
 				let names = CompileIdentifiers(names);

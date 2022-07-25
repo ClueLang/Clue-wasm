@@ -2,30 +2,99 @@
 
 use self::TokenType::*;
 
-#[rustfmt::skip]
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TokenType {
 	//symbols
-	ROUND_BRACKET_OPEN, ROUND_BRACKET_CLOSED, SQUARE_BRACKET_OPEN,
-	SQUARE_BRACKET_CLOSED, CURLY_BRACKET_OPEN, CURLY_BRACKET_CLOSED,
-	COMMA, SEMICOLON, NOT, AND, OR, DOLLAR, PLUS, MINUS, STAR, SLASH,
-	PERCENTUAL, CARET, HASHTAG, SAFE_DOUBLE_COLON, DOUBLE_COLON,
-	DOT, TWODOTS, TREDOTS, SAFEDOT, SAFE_SQUARE_BRACKET, PROTECTED_GET,
-	BIT_AND, BIT_OR, BIT_XOR, BIT_NOT, LEFT_SHIFT, RIGHT_SHIFT,
-	TERNARY_THEN, TERNARY_ELSE, ARROW,
+	ROUND_BRACKET_OPEN,
+	ROUND_BRACKET_CLOSED,
+	SQUARE_BRACKET_OPEN,
+	SQUARE_BRACKET_CLOSED,
+	CURLY_BRACKET_OPEN,
+	CURLY_BRACKET_CLOSED,
+	COMMA,
+	SEMICOLON,
+	NOT,
+	AND,
+	OR,
+	DOLLAR,
+	PLUS,
+	MINUS,
+	STAR,
+	SLASH,
+	PERCENTUAL,
+	CARET,
+	HASHTAG,
+	SAFE_DOUBLE_COLON,
+	DOUBLE_COLON,
+	AT,
+	DOT,
+	TWODOTS,
+	THREEDOTS,
+	SAFEDOT,
+	SAFE_SQUARE_BRACKET,
+	PROTECTED_GET,
+	BIT_AND,
+	BIT_OR,
+	BIT_XOR,
+	BIT_NOT,
+	LEFT_SHIFT,
+	RIGHT_SHIFT,
+	TERNARY_THEN,
+	TERNARY_ELSE,
+	ARROW,
 
 	//definition and comparison
-	DEFINE, DEFINE_AND, DEFINE_OR, INCREASE, DECREASE, MULTIPLY, DIVIDE,
-	EXPONENTIATE, CONCATENATE, MODULATE, EQUAL, NOT_EQUAL,
-	BIGGER, BIGGER_EQUAL, SMALLER, SMALLER_EQUAL,
+	DEFINE,
+	DEFINE_AND,
+	DEFINE_OR,
+	INCREASE,
+	DECREASE,
+	MULTIPLY,
+	DIVIDE,
+	EXPONENTIATE,
+	CONCATENATE,
+	MODULATE,
+	EQUAL,
+	NOT_EQUAL,
+	BIGGER,
+	BIGGER_EQUAL,
+	SMALLER,
+	SMALLER_EQUAL,
 
 	//literals
-	IDENTIFIER, NUMBER, STRING,
+	IDENTIFIER,
+	NUMBER,
+	STRING,
 
 	//keywords
-	IF, ELSEIF, ELSE, FOR, OF, IN, WITH, WHILE, META, GLOBAL, UNTIL,
-	LOCAL, FN, METHOD, RETURN, TRUE, FALSE, NIL, LOOP, STATIC, ENUM,
-	CONTINUE, BREAK, TRY, CATCH, MATCH, DEFAULT,
+	IF,
+	ELSEIF,
+	ELSE,
+	FOR,
+	OF,
+	IN,
+	WITH,
+	WHILE,
+	META,
+	GLOBAL,
+	UNTIL,
+	LOCAL,
+	FN,
+	METHOD,
+	RETURN,
+	TRUE,
+	FALSE,
+	NIL,
+	LOOP,
+	STATIC,
+	ENUM,
+	CONTINUE,
+	BREAK,
+	TRY,
+	CATCH,
+	MATCH,
+	DEFAULT,
+	MACRO,
 
 	EOF,
 }
@@ -55,6 +124,7 @@ struct CodeInfo {
 	code: Vec<char>,
 	filename: String,
 	tokens: Vec<Token>,
+	last: TokenType,
 	errored: bool,
 }
 
@@ -69,6 +139,7 @@ impl CodeInfo {
 			code: chars.collect(),
 			filename,
 			tokens: Vec::new(),
+			last: EOF,
 			errored: false,
 		}
 	}
@@ -130,6 +201,7 @@ impl CodeInfo {
 
 	fn addToken(&mut self, kind: TokenType) {
 		let lexeme: String = self.substr(self.start, self.current);
+		self.last = kind;
 		self.tokens.push(Token::new(kind, lexeme, self.line));
 	}
 
@@ -227,6 +299,16 @@ impl CodeInfo {
 		self.line = aline;
 	}
 
+	fn readIdentifier(&mut self) -> String {
+		while {
+			let c = self.peek(0);
+			c.is_ascii_alphanumeric() || c == '_'
+		} {
+			self.current += 1
+		}
+		self.substr(self.start, self.current)
+	}
+
 	fn reserved(&mut self, keyword: &str, msg: &str) -> TokenType {
 		self.warning(format!(
 			"'{}' is a reserved keyword in Lua and it cannot be used as a variable, {}",
@@ -255,7 +337,7 @@ pub fn ScanCode(code: String, filename: String) -> Result<Vec<Token>, String> {
 					let f: char = i.peek(0);
 					if f == '.' {
 						i.current += 1;
-						i.addToken(TREDOTS);
+						i.addToken(THREEDOTS);
 					} else if f == '=' {
 						i.current += 1;
 						i.addToken(CONCATENATE);
@@ -331,6 +413,7 @@ pub fn ScanCode(code: String, filename: String) -> Result<Vec<Token>, String> {
 			':' => i.matchAndAdd(':', DOUBLE_COLON, '=', DEFINE_OR, TERNARY_ELSE),
 			'|' => i.compareAndAdd('|', OR, BIT_OR),
 			'$' => i.addToken(DOLLAR),
+			'@' => i.addToken(AT),
 			' ' | '\r' | '\t' => {}
 			'\n' => i.line += 1,
 			'"' | '\'' => i.readString(c),
@@ -365,49 +448,47 @@ pub fn ScanCode(code: String, filename: String) -> Result<Vec<Token>, String> {
 						i.readNumber(char::is_ascii_digit, true);
 					}
 				} else if c.is_ascii_alphabetic() || c == '_' {
-					while {
-						let c = i.peek(0);
-						c.is_ascii_alphanumeric() || c == '_'
-					} {
-						i.current += 1
-					}
-					let string: String = i.substr(i.start, i.current);
-					let kind: TokenType = match string.as_str() {
+					let kind: TokenType = match i.readIdentifier().as_str() {
+						"and" => i.reserved("and", "'and' operators in Clue are made with '&&'"),
+						"not" => i.reserved("not", "'not' operators in Clue are made with '!'"),
+						"or" => i.reserved("or", "'or' operators in Clue are made with '||'"),
+						"do" => i.reserved("do", "'do ... end' blocks in Clue are made like this: '{ ... }'"),
+						"end" => i.reserved("end", "code blocks in Clue are closed with '}'"),
+						"function" => i.reserved("function", "functions in Clue are defined with the 'fn' keyword"),
+						"repeat" => i.reserved("repeat", "'repeat ... until x' loops in Clue are made like this: 'loop { ... } until x'"),
+						"then" => i.reserved("then", "code blocks in Clue are opened with '{'"),
 						"if" => IF,
 						"elseif" => ELSEIF,
 						"else" => ELSE,
 						"for" => FOR,
-						"of" => OF,
 						"in" => IN,
-						"with" => WITH,
 						"while" => WHILE,
-						"meta" => META,
-						"global" => GLOBAL,
 						"until" => UNTIL,
 						"local" => LOCAL,
-						"fn" => FN,
-						"method" => METHOD,
 						"return" => RETURN,
 						"true" => TRUE,
 						"false" => FALSE,
 						"nil" => NIL,
+						"break" => BREAK,
+						_ if match i.last {
+							DOT | SAFEDOT | DOUBLE_COLON | SAFE_DOUBLE_COLON => true,
+							_ => false
+						} => IDENTIFIER,
+						"of" => OF,
+						"with" => WITH,
+						"meta" => META,
+						"global" => GLOBAL,
+						"fn" => FN,
+						"method" => METHOD,
 						"loop" => LOOP,
 						"static" => STATIC,
 						"enum" => ENUM,
 						"continue" => CONTINUE,
-						"break" => BREAK,
 						"try" => TRY,
 						"catch" => CATCH,
 						"match" => MATCH,
 						"default" => DEFAULT,
-						"and" => i.reserved("and", "'and' operators in Clue are made with '&&'"),
-						"not" => i.reserved("not", "'not' operators in Clue are made with '!'"),
-						"or" => i.reserved("or", "'or' operators in Clue are made with '||'"),
-						"do" => i.reserved("do", "'do ... end' blocks in Clue are made like this: '{{ ... }}'"),
-						"end" => i.reserved("end", "code blocks in Clue are closed with '}}'"),
-						"function" => i.reserved("function", "functions in Clue are defined with the 'fn' keyword"),
-						"repeat" => i.reserved("repeat", "'repeat ... until x' loops in Clue are made like this: 'loop {{ ... }} until x'"),
-						"then" => i.reserved("then", "code blocks in Clue are opened with '{{'"),
+						"macro" => MACRO,
 						_ => IDENTIFIER
 					};
 					i.addToken(kind);
