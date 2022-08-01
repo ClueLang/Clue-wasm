@@ -4,8 +4,8 @@ use self::ComplexToken::*;
 use crate::TokenType::*;
 use crate::TokenType::{COMMA, CURLY_BRACKET_CLOSED, DEFINE, ROUND_BRACKET_CLOSED};
 use crate::{
-	compiler::CompileTokens, finaloutput, Token, TokenType, ENV_CONTINUE, ENV_DEBUGCOMMENTS,
-	ENV_JITBIT,
+	compiler::CompileTokens, finaloutput, ContinueMode, Token, TokenType, ENV_CONTINUE,
+	ENV_DEBUGCOMMENTS, ENV_JITBIT,
 };
 use std::{
 	cmp,
@@ -488,6 +488,23 @@ impl ParserInfo {
 		Ok(())
 	}
 
+	fn buildFunctionOp(
+		&mut self,
+		t: Token,
+		expr: &mut Expression,
+		fname: impl Into<String>,
+		end: OptionalEnd,
+	) -> Result<(), String> {
+		self.checkOperator(&t, true)?;
+		let mut arg1 = Expression::new();
+		arg1.append(expr);
+		let arg2 = self.buildExpression(end)?;
+		expr.push_back(SYMBOL(fname.into()));
+		expr.push_back(CALL(vec![arg1, arg2]));
+		self.current -= 1;
+		Ok(())
+	}
+
 	fn buildBitwiseOp(
 		&mut self,
 		t: Token,
@@ -497,11 +514,7 @@ impl ParserInfo {
 	) -> Result<(), String> {
 		self.checkOperator(&t, true)?;
 		if let Some(bit) = arg!(&ENV_JITBIT) {
-			let mut arg1 = Expression::new();
-			arg1.append(expr);
-			let arg2 = self.buildExpression(end)?;
-			expr.push_back(SYMBOL(format!("{}.{}", bit, fname)));
-			expr.push_back(CALL(vec![arg1, arg2]));
+			self.buildFunctionOp(t, expr, format!("{}.{}", bit, fname), end)?
 		} else {
 			expr.push_back(SYMBOL(t.lexeme))
 		}
@@ -554,7 +567,9 @@ impl ParserInfo {
 					let macroexpr = if let Some(macroexpr) = code {
 						macroexpr.clone()
 					} else {
-						return Err(self.error(format!("The macro {} is not defined", name), t.line));
+						return Err(
+							self.error(format!("The macro {} is not defined", name), t.line)
+						);
 					};
 					let args = if self.advanceIf(ROUND_BRACKET_OPEN) {
 						self.buildCall()?
@@ -593,6 +608,7 @@ impl ParserInfo {
 						t.lexeme
 					}))
 				}
+				FLOOR_DIVISION => self.buildFunctionOp(t, &mut expr, "math.floor", end)?,
 				BIT_AND => self.buildBitwiseOp(t, &mut expr, "band", end)?,
 				BIT_OR => self.buildBitwiseOp(t, &mut expr, "bor", end)?,
 				BIT_XOR => self.buildBitwiseOp(t, &mut expr, "bxor", end)?,
@@ -602,6 +618,7 @@ impl ParserInfo {
 						let arg = self.buildExpression(end)?;
 						expr.push_back(SYMBOL(bit.clone() + ".bnot"));
 						expr.push_back(CALL(vec![arg]));
+						self.current -= 1;
 					} else {
 						expr.push_back(SYMBOL(t.lexeme))
 					}
@@ -711,14 +728,8 @@ impl ParserInfo {
 						break t;
 					}
 				}
-				THREEDOTS | NUMBER | TRUE | FALSE | NIL => {
+				THREEDOTS | NUMBER | TRUE | FALSE | NIL | STRING => {
 					expr.push_back(SYMBOL(t.lexeme.clone()));
-					if self.checkVal() {
-						break t;
-					}
-				}
-				STRING => {
-					expr.push_back(SYMBOL(format!("\"{}\"", t.lexeme)));
 					if self.checkVal() {
 						break t;
 					}
@@ -727,6 +738,9 @@ impl ParserInfo {
 					expr.push_back(EXPR(
 						self.buildExpression(Some((ROUND_BRACKET_CLOSED, ")")))?,
 					));
+					if self.checkVal() {
+						break t;
+					}
 					self.current += 1;
 					let fname = self.buildIdentifier()?;
 					expr.push_back(fname);
@@ -880,16 +894,27 @@ impl ParserInfo {
 		Ok(IDENT { expr, line })
 	}
 
+	fn getCodeBlockStart(&mut self) -> Result<usize, String> {
+		let t = self.advance();
+		if t.kind != CURLY_BRACKET_OPEN {
+			self.current -= 2;
+			Ok(self.assertAdvance(CURLY_BRACKET_OPEN, "{")?.line)
+		} else {
+			Ok(t.line)
+		}
+	}
+
+	fn parseCodeBlock(&self, mut tokens: Vec<Token>) -> Result<Expression, String> {
+		if tokens.is_empty() {
+			Ok(Expression::new())
+		} else {
+			tokens.push(self.tokens.last().unwrap().clone());
+			Ok(ParseTokens(tokens, self.filename.clone())?)
+		}
+	}
+
 	fn buildCodeBlock(&mut self) -> Result<CodeBlock, String> {
-		let start = {
-			let t = self.advance();
-			if t.kind != CURLY_BRACKET_OPEN {
-				self.current -= 2;
-				self.assertAdvance(CURLY_BRACKET_OPEN, "{")?.line
-			} else {
-				t.line
-			}
-		};
+		let start = self.getCodeBlockStart()?;
 		let mut tokens: Vec<Token> = Vec::new();
 		let mut cscope = 1u8;
 		let end: usize;
@@ -909,21 +934,102 @@ impl ParserInfo {
 			}
 			tokens.push(t);
 		}
-		let code = if tokens.is_empty() {
-			Expression::new()
-		} else {
-			tokens.push(self.tokens.last().unwrap().clone());
-			ParseTokens(tokens, self.filename.clone())?
-		};
+		let code = self.parseCodeBlock(tokens)?;
 		Ok(CodeBlock { start, code, end })
 	}
 
 	fn buildLoopBlock(&mut self) -> Result<CodeBlock, String> {
-		let mut code = self.buildCodeBlock()?;
-		if arg!(ENV_CONTINUE) {
-			code.code.push_back(SYMBOL(String::from("::continue::")));
+		let mut hascontinue = false;
+		let mut is_in_other_loop = false;
+		let start = self.getCodeBlockStart()?;
+		let mut tokens: Vec<Token> = Vec::new();
+		let mut cscope = 1u8;
+		let end: usize;
+		loop {
+			let t = self.advance();
+			match t.kind {
+				CURLY_BRACKET_OPEN => cscope += 1,
+				CURLY_BRACKET_CLOSED => {
+					cscope -= 1;
+					is_in_other_loop = false;
+					if cscope == 0 {
+						end = t.line;
+						break;
+					}
+				}
+				FOR | WHILE | LOOP => is_in_other_loop = true,
+				CONTINUE if !is_in_other_loop => {
+					hascontinue = true;
+					let line = t.line;
+					if arg!(ENV_CONTINUE) == ContinueMode::MOONSCRIPT {
+						tokens.push(Token {
+							kind: IDENTIFIER,
+							lexeme: String::from("_continue"),
+							line,
+						});
+						tokens.push(Token {
+							kind: DEFINE,
+							lexeme: String::from("="),
+							line,
+						});
+						tokens.push(Token {
+							kind: TRUE,
+							lexeme: String::from("true"),
+							line,
+						});
+						tokens.push(Token {
+							kind: BREAK,
+							lexeme: String::from("break"),
+							line,
+						});
+						continue;
+					}
+				}
+				EOF => return Err(self.expectedBefore("}", "<end>", t.line)),
+				_ => {}
+			}
+			tokens.push(t);
 		}
-		Ok(code)
+		let mut code = self.parseCodeBlock(tokens)?;
+		if hascontinue {
+			match arg!(ENV_CONTINUE) {
+				ContinueMode::SIMPLE => {}
+				ContinueMode::LUAJIT => code.push_back(SYMBOL(String::from("::continue::"))),
+				ContinueMode::MOONSCRIPT => {
+					code.push_back(ALTER {
+						kind: DEFINE,
+						names: vec![expression![SYMBOL(String::from("_continue"))]],
+						values: vec![expression![SYMBOL(String::from("true"))]],
+						line: end,
+					});
+					code = expression![
+						VARIABLE {
+							local: true,
+							names: vec![String::from("_continue")],
+							values: vec![expression![SYMBOL(String::from("false"))]],
+							line: start
+						},
+						LOOP_UNTIL {
+							condition: expression![SYMBOL(String::from("true"))],
+							code: CodeBlock { start, code, end }
+						},
+						IF_STATEMENT {
+							condition: expression![
+								SYMBOL(String::from("not ")),
+								SYMBOL(String::from("_continue"))
+							],
+							code: CodeBlock {
+								start: end,
+								code: expression![BREAK_LOOP],
+								end
+							},
+							next: None
+						}
+					]
+				}
+			}
+		}
+		Ok(CodeBlock { start, code, end })
 	}
 
 	fn buildIdentifierList(&mut self) -> Result<Vec<String>, String> {

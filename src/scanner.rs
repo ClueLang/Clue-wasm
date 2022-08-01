@@ -2,99 +2,31 @@
 
 use self::TokenType::*;
 
+#[rustfmt::skip]
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TokenType {
 	//symbols
-	ROUND_BRACKET_OPEN,
-	ROUND_BRACKET_CLOSED,
-	SQUARE_BRACKET_OPEN,
-	SQUARE_BRACKET_CLOSED,
-	CURLY_BRACKET_OPEN,
-	CURLY_BRACKET_CLOSED,
-	COMMA,
-	SEMICOLON,
-	NOT,
-	AND,
-	OR,
-	DOLLAR,
-	PLUS,
-	MINUS,
-	STAR,
-	SLASH,
-	PERCENTUAL,
-	CARET,
-	HASHTAG,
-	SAFE_DOUBLE_COLON,
-	DOUBLE_COLON,
-	AT,
-	DOT,
-	TWODOTS,
-	THREEDOTS,
-	SAFEDOT,
-	SAFE_SQUARE_BRACKET,
-	PROTECTED_GET,
-	BIT_AND,
-	BIT_OR,
-	BIT_XOR,
-	BIT_NOT,
-	LEFT_SHIFT,
-	RIGHT_SHIFT,
-	TERNARY_THEN,
-	TERNARY_ELSE,
-	ARROW,
+	ROUND_BRACKET_OPEN, ROUND_BRACKET_CLOSED, SQUARE_BRACKET_OPEN,
+	SQUARE_BRACKET_CLOSED, CURLY_BRACKET_OPEN, CURLY_BRACKET_CLOSED,
+	COMMA, SEMICOLON, NOT, AND, OR, DOLLAR, PLUS, MINUS, STAR, SLASH,
+	PERCENTUAL, CARET, HASHTAG, SAFE_DOUBLE_COLON, DOUBLE_COLON, AT,
+	DOT, TWODOTS, THREEDOTS, SAFEDOT, SAFE_SQUARE_BRACKET, PROTECTED_GET,
+	BIT_AND, BIT_OR, BIT_XOR, BIT_NOT, LEFT_SHIFT, RIGHT_SHIFT,
+	TERNARY_THEN, TERNARY_ELSE, ARROW, FLOOR_DIVISION,
 
 	//definition and comparison
-	DEFINE,
-	DEFINE_AND,
-	DEFINE_OR,
-	INCREASE,
-	DECREASE,
-	MULTIPLY,
-	DIVIDE,
-	EXPONENTIATE,
-	CONCATENATE,
-	MODULATE,
-	EQUAL,
-	NOT_EQUAL,
-	BIGGER,
-	BIGGER_EQUAL,
-	SMALLER,
-	SMALLER_EQUAL,
+	DEFINE, DEFINE_AND, DEFINE_OR, INCREASE, DECREASE, MULTIPLY, DIVIDE,
+	EXPONENTIATE, CONCATENATE, MODULATE, EQUAL, NOT_EQUAL,
+	BIGGER, BIGGER_EQUAL, SMALLER, SMALLER_EQUAL,
 
 	//literals
-	IDENTIFIER,
-	NUMBER,
-	STRING,
+	IDENTIFIER, NUMBER, STRING,
 
 	//keywords
-	IF,
-	ELSEIF,
-	ELSE,
-	FOR,
-	OF,
-	IN,
-	WITH,
-	WHILE,
-	META,
-	GLOBAL,
-	UNTIL,
-	LOCAL,
-	FN,
-	METHOD,
-	RETURN,
-	TRUE,
-	FALSE,
-	NIL,
-	LOOP,
-	STATIC,
-	ENUM,
-	CONTINUE,
-	BREAK,
-	TRY,
-	CATCH,
-	MATCH,
-	DEFAULT,
-	MACRO,
+	IF, ELSEIF, ELSE, FOR, OF, IN, WITH, WHILE, META, GLOBAL, UNTIL,
+	LOCAL, FN, METHOD, RETURN, TRUE, FALSE, NIL, LOOP, STATIC, ENUM,
+	CONTINUE, BREAK, TRY, CATCH, MATCH, DEFAULT, MACRO, STRUCT, EXTERN,
+	CONSTRUCTOR,
 
 	EOF,
 }
@@ -274,7 +206,7 @@ impl CodeInfo {
 				self.warning("Malformed number");
 			}
 		}
-		self.addLiteralToken(NUMBER, self.substr(self.start, self.current));
+		self.addToken(NUMBER);
 	}
 
 	fn readString(&mut self, strend: char) {
@@ -289,7 +221,7 @@ impl CodeInfo {
 			self.warning("Unterminated string");
 		} else {
 			self.current += 1;
-			let mut literal: String = self.substr(self.start + 1, self.current - 1);
+			let mut literal: String = self.substr(self.start, self.current);
 			literal.retain(|c| match c {
 				'\r' | '\n' | '\t' => false,
 				_ => true,
@@ -297,6 +229,23 @@ impl CodeInfo {
 			self.addLiteralToken(STRING, literal);
 		}
 		self.line = aline;
+	}
+
+	fn readLiteralString(&mut self) {
+		let mut aline = self.line;
+		while !self.ended() && self.peek(0) != '`' {
+			if self.peek(0) == '\n' {
+				aline += 1
+			};
+			self.current += 1;
+		}
+		if self.ended() {
+			self.warning("Unterminated string");
+		} else {
+			self.current += 1;
+			self.addToken(STRING);
+		}
+		self.line = aline
 	}
 
 	fn readIdentifier(&mut self) -> String {
@@ -373,11 +322,7 @@ pub fn ScanCode(code: String, filename: String) -> Result<Vec<Token>, String> {
 						i.current += 2;
 					}
 				}
-				'=' => {
-					i.current += 1;
-					i.addToken(DIVIDE);
-				}
-				_ => i.addToken(SLASH),
+				_ => i.matchAndAdd('=', DIVIDE, '_', FLOOR_DIVISION, SLASH),
 			},
 			'%' => i.compareAndAdd('=', MODULATE, PERCENTUAL),
 			'!' => i.compareAndAdd('=', NOT_EQUAL, NOT),
@@ -417,6 +362,7 @@ pub fn ScanCode(code: String, filename: String) -> Result<Vec<Token>, String> {
 			' ' | '\r' | '\t' => {}
 			'\n' => i.line += 1,
 			'"' | '\'' => i.readString(c),
+			'`' => i.readLiteralString(),
 			_ => {
 				if c.is_ascii_digit() {
 					if c == '0' {
@@ -489,6 +435,9 @@ pub fn ScanCode(code: String, filename: String) -> Result<Vec<Token>, String> {
 						"match" => MATCH,
 						"default" => DEFAULT,
 						"macro" => MACRO,
+						"constructor" => {i.warning("The struct constructor is reserved for Clue 3.X and cannot be used."); CONSTRUCTOR},
+						"struct" => {i.warning("The struct keyword is reserved for Clue 3.X and cannot be used."); STRUCT},
+						"extern" => {i.warning("The extern keyword is reserved for Clue 3.0 and cannot be used."); EXTERN},
 						_ => IDENTIFIER
 					};
 					i.addToken(kind);

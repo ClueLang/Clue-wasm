@@ -1,7 +1,7 @@
 use crate::{
 	parser::{CodeBlock, ComplexToken, ComplexToken::*, Expression, FunctionArgs},
 	scanner::TokenType::*,
-	ENV_CONTINUE, ENV_DEBUGCOMMENTS, ENV_RAWSETGLOBALS,
+	ContinueMode, ENV_CONTINUE, ENV_DEBUGCOMMENTS, ENV_RAWSETGLOBALS,
 };
 use std::iter::{Iterator, Peekable};
 
@@ -152,7 +152,15 @@ fn CompileExpression(mut scope: usize, names: Option<&Vec<String>>, expr: Expres
 				let expr = CompileExpression(scope, Some(&args), expr);
 				format!("({})", expr)
 			}
-			SYMBOL(lexeme) => lexeme,
+			SYMBOL(lexeme) => {
+				let chars: Vec<_> = lexeme.chars().collect();
+				if chars[0] == '`' && chars[lexeme.len() - 1] == '`' {
+					let text = &lexeme[1..lexeme.len() - 1];
+					return format!("[[{}]]", text);
+				}
+				lexeme
+			}
+
 			PSEUDO(num) => match names {
 				Some(names) => names
 					.get(num - 1)
@@ -263,7 +271,14 @@ pub fn CompileTokens(scope: usize, ctokens: Expression) -> String {
 	let ctokens = &mut ctokens.into_iter().peekable();
 	while let Some(t) = ctokens.next() {
 		result += &match t {
-			SYMBOL(lexeme) => lexeme,
+			SYMBOL(lexeme) => {
+				let chars: Vec<_> = lexeme.chars().collect();
+				if chars[0] == '`' && chars[lexeme.len() - 1] == '`' {
+					let text = &lexeme[1..lexeme.len() - 1];
+					return format!("[[{}]]", text);
+				}
+				lexeme
+			}
 			VARIABLE {
 				local,
 				names,
@@ -528,7 +543,7 @@ pub fn CompileTokens(scope: usize, ctokens: Expression) -> String {
 				let end = IndentateIf(ctokens, scope);
 				format!(
 					"{};{}",
-					if arg!(ENV_CONTINUE) {
+					if arg!(ENV_CONTINUE) == ContinueMode::LUAJIT {
 						"goto continue"
 					} else {
 						"continue"
