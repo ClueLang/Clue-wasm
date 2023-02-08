@@ -6,7 +6,9 @@ edition = "2018"
 authors = ["Maiori"]
 
 [dependencies]
+clue_core = { version = "*", default-features = false }
 wasm-bindgen = "0.2.63"
+
 
 [lib]
 crate-type = ["cdylib", "rlib"]

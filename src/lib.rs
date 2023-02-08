@@ -1,47 +1,24 @@
-#![allow(non_snake_case)]
-#![allow(non_upper_case_globals)]
-
-macro_rules! check {
-	($tocheck: expr) => {
-		match $tocheck {
-			Ok(t) => t,
-			Err(e) => return Err(e.to_string()),
-		}
-	};
-}
-
-macro_rules! arg {
-	($name: expr) => {
-		unsafe { $name }
-	};
-}
-
-mod compiler;
-mod parser;
-mod scanner;
-use compiler::*;
-use parser::*;
-use scanner::*;
+use clue_core::{
+	compiler::Compiler,
+	env::Options,
+	parser::parse_tokens,
+	preprocessor::{preprocess_code, preprocess_codes},
+	scanner::scan_code,
+};
 use wasm_bindgen::prelude::*;
 
-pub static mut finaloutput: String = String::new();
-
-pub static mut ENV_JITBIT: Option<String> = None;
-pub static mut ENV_CONTINUE: ContinueMode = ContinueMode::SIMPLE;
-pub static mut ENV_RAWSETGLOBALS: bool = false;
-pub static mut ENV_DEBUGCOMMENTS: bool = false;
-
-#[derive(Copy, Clone, PartialEq)]
-pub enum ContinueMode {
-	SIMPLE,
-	LUAJIT,
-	MOONSCRIPT,
-}
-
 #[wasm_bindgen]
-pub fn CompileCode(code: String, name: String, scope: usize) -> Result<String, String> {
-	let tokens: Vec<Token> = ScanCode(code, name.clone())?;
-	let ctokens = ParseTokens(tokens, name.clone())?;
-	let code = CompileTokens(scope, ctokens);
+pub fn compile_code(mut code: String) -> Result<String, String> {
+	let options = Options::default();
+	let filename = String::from("(clue wasm)");
+	let code = unsafe { code.as_bytes_mut() };
+	let (codes, variables, ..) = preprocess_code(code, 1, false, &filename)?;
+	let code = preprocess_codes(0, codes, &variables, &filename)?;
+	let tokens = scan_code(code, &filename)?;
+	let (ctokens, statics) = parse_tokens(tokens, &filename, &options)?;
+
+	let code = Compiler::new(&options).compile_tokens(0, ctokens);
+	let code = code + &statics;
+
 	Ok(code)
 }
