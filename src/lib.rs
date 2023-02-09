@@ -8,6 +8,11 @@ use clue_core::{
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
+pub fn version() -> String {
+	String::from(env!("CARGO_PKG_VERSION"))
+}
+
+#[wasm_bindgen]
 pub fn compile_code(mut code: String) -> Result<String, String> {
 	let options = Options::default();
 	let filename = String::from("(clue wasm)");
